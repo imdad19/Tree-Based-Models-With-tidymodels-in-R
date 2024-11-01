@@ -1,0 +1,363 @@
+---
+title: "Predicting Loans Using Tree-Based Models"
+author: "Aouidane Imed Eddine"
+date: "2024-10-30"
+subtitle: "A Comprehensive Approach to Aplly Tree Models"
+abstract: |
+  This project explores tree based models applied to a loans dataset.
+  The analysis includes various grid search methods to optimize model performance.
+format: 
+  html:
+    toc: true
+    toc-depth: 3
+    toc-title: "Table of Contents"
+    number-sections: true
+    theme: cosmo      # Change theme for better aesthetics
+    css: "styles.css" # Link a custom CSS file for additional styling
+    include-after-body: "footer.Rhtml"
+  pdf:
+    toc: true
+    number-sections: true
+    latex-engine: xelatex  # Support for more advanced fonts
+    keep-tex: true         # Optionally keep the TeX file for debugging
+    include-after-body: "footer.Rhtml"
+  docx: default
+fontsize: 11pt
+geometry: "left=1in, right=1in, top=1in, bottom=1in"
+lang: en
+keywords: ["Decision Trees", "Machine Learning", "Model Tuning", "Loans Dataset","Boosting trees"]
+description: "Optimizing Decision Making using Cross validation and hyperparameter tuning methods on a loans dataset"
+---
+
+![](tree_image.jpg)
+
+```{r setup, message=FALSE,warning=FALSE}
+library(tidyverse)
+library(tidymodels)
+library(DT)
+library(corrplot)
+library(baguette)
+```
+
+# Introduction to the Loans Dataset
+
+The dataset provides historical information on loan applicants and their corresponding default status. Here, we’ll load the dataset and present a first look at its structure and variables.
+
+```{r,fig.height=12}
+loans <- read_rds("D:\\dataset\\loan_df.rds")
+datatable(loans,rownames = FALSE,caption = "Loans Dataset",options = list(
+    searching = FALSE,
+    ordering = TRUE))
+```
+
+We use an interactive table to display the loans dataset, allowing for a clearer view of the loan data. This view will serve as the base for exploratory and feature engineering tasks.
+
+```{r}
+glimpse(loans)
+```
+
+# Statistical Summary of the Dataset
+
+A statistical summary helps in understanding the basic distributions and ranges of numeric variables in the dataset. This summary includes important measures like mean, standard deviation, and range for each feature.
+
+```{r}
+statistical_summary <- psych::describe(loans)
+datatable(statistical_summary,caption = "Loans Dataset Statistical summary",options = list(
+    searching = FALSE,
+    ordering = TRUE))
+```
+
+# Correlation Analysis
+
+To investigate relationships among variables, we generate a correlation plot, which helps identify highly correlated features that may be redundant for the model.
+
+```{r}
+correlation <- cor(loans[,c(4:7)],method = "pearson")
+corrplot(correlation,method = "number")
+```
+
+-   We can observe that there's a high correlation between interest rate and installement variable which can lead to bayesed results. this is a problem we have to deal with.
+
+# Data Splitting
+
+To ensure a fair evaluation of the model, we split the dataset into training and testing sets. We stratify on loan_default to maintain the same proportion of defaults across both sets.
+
+```{r}
+loans_split <- initial_split(loans,strata = loan_default,prop = .8)
+loans_training <- training(loans_split)
+loans_test <- testing(loans_split)
+```
+
+# Feature Engineering and Data Preprocessing
+
+Feature engineering is a critical step that prepares the data for model training. Here, we set up a recipe that performs normalization, correlation filtering, and dummy encoding for categorical variables. \## Building a recipe
+
+```{r}
+loans_recipe <- recipe(loans_training,formula = loan_default ~ .) %>% 
+  step_corr(all_numeric_predictors()) %>% 
+  step_dummy(all_nominal(),-all_outcomes()) %>% 
+  step_normalize(all_numeric())
+```
+
+## Creating cross validation folds
+
+```{r}
+loans_cv <- vfold_cv(data = loans_training,v = 5)
+```
+
+# Model Selection and Comparison
+
+In this project, we evaluate four tree-based models: Decision Trees, Bagged Trees, Random Forests, and Boosted Trees. Each model has unique characteristics and approaches to handling data, making them suitable for different scenarios. Below is a brief overview of each:
+
+## 1. Decision Tree
+
+A basic Decision Tree is a flowchart-like structure where internal nodes represent tests on a feature, branches represent the outcomes, and leaf nodes represent the final predictions. It is easy to interpret but can overfit on complex data.
+
+```{r}
+dtree_model <- decision_tree(tree_depth = tune(),min_n = tune()) %>% 
+  set_mode("classification") %>% 
+  set_engine("rpart")
+
+```
+
+## 2. Bagged Trees
+
+Bagged Trees involve creating multiple decision trees using bootstrapped samples of the data and averaging their predictions. This method helps reduce variance and mitigates overfitting.
+
+::: callout-note
+Note that this is the slowest model due to the nature of the algorithm.
+:::
+
+```{r}
+bagged_tree <- bag_tree(tree_depth = tune(),min_n = tune(),cost_complexity = tune()) %>% 
+  set_mode("classification") %>% 
+  set_engine("rpart", times = 100)
+```
+
+## 3. Random Forest
+
+Random Forests further enhance bagging by adding randomness in feature selection at each split. This helps in reducing the correlation between trees, making it more robust.
+
+```{r}
+random_forest <- rand_forest(trees = tune(),min_n = tune()) %>% 
+  set_mode("classification") %>% 
+  set_engine("ranger")
+```
+
+## 4. Boosted Trees
+
+Boosted Trees are an ensemble technique where each subsequent tree focuses on the residuals of the previous trees, improving areas where errors were made. This model is known for high accuracy on complex data.
+
+```{r}
+boosted_tree <- boost_tree(tree_depth = tune(),trees = tune(),learn_rate = tune()) %>% 
+  set_mode("classification") %>% 
+  set_engine("xgboost")
+```
+
+## Hyperparameter Tuning Grids
+
+We use grid search to tune hyperparameters for each model. Each grid search produces a range of parameter combinations, allowing us to select the best-performing set.
+
+```{r}
+dtree_parameters_grid <- grid_random(parameters(dtree_model),size = 15)
+bagged_tree_params <- grid_random(parameters(bagged_tree),size = 15)
+random_forest_params <- grid_random(parameters(random_forest),size = 15)
+boosted_tree_params <- grid_random(parameters(boosted_tree),size = 15)
+```
+
+# Workflow and Model Training
+
+Each model is defined within a workflow, combining the recipe with the model specification. The workflow enables efficient training and validation.
+
+## Decision Tree Workflow
+
+```{r}
+dtree_workflow <- workflow() %>% 
+  add_recipe(loans_recipe) %>% 
+  add_model(dtree_model)
+```
+
+## Bagged Tree Workflow
+
+```{r}
+bagged_tree_workflow <- workflow() %>% 
+  add_recipe(loans_recipe) %>% 
+  add_model(bagged_tree)
+```
+
+## Random Forest Workflow
+
+```{r}
+randomforest_workflow <- workflow() %>% 
+  add_recipe(loans_recipe) %>% 
+  add_model(random_forest)
+```
+
+## Boosted Tree Workflow
+
+```{r}
+boosted_tree_workflow <- workflow() %>% 
+  add_recipe(loans_recipe) %>% 
+  add_model(boosted_tree)
+```
+
+# Model Fitting with Cross-Validation
+
+Each model is fit using cross-validation to assess its performance across different hyperparameter configurations.
+
+## Decision Tree
+
+```{r}
+dtree_fit <- tune_grid(dtree_workflow,grid = dtree_parameters_grid,resamples = loans_cv,metrics = metric_set(roc_auc,accuracy))
+```
+
+## Bagged Tree
+
+```{r}
+bagged_tree_fit <- tune_grid(bagged_tree_workflow,grid = bagged_tree_params,resamples = loans_cv)
+```
+
+## Random Forest
+
+```{r}
+random_forest_fit <- tune_grid(randomforest_workflow,grid = random_forest_params,resamples = loans_cv)
+```
+
+# Boosted Tree
+
+```{r}
+boosted_tree_fit <- tune_grid(boosted_tree_workflow,grid = boosted_tree_params,resamples = loans_cv)
+```
+
+# Model Comparison and Evaluation
+
+Each model’s performance is summarized, displaying metrics such as minimum, maximum, mean, and median for both accuracy and ROC AUC. This allows us to understand the variability and reliability of each model.
+
+::: {.panel-tabset .nav-pills}
+## Random Forest
+
+```{r}
+rand_forest_results <- random_forest_fit %>% 
+  collect_metrics(summarize = FALSE) %>% 
+  group_by(.metric) %>% 
+  summarise(min = min(.estimate),max = max(.estimate),mean = mean(.estimate),median = median(.estimate)) %>% 
+  mutate(across(where(is.numeric), ~ round(., 3)))
+
+datatable(rand_forest_results,rownames = FALSE,options = list(
+    searching = FALSE,
+    ordering = FALSE))
+```
+
+## Decision Tree
+
+```{r}
+decision_tree_results <- dtree_fit %>% 
+  collect_metrics(summarize = FALSE) %>% 
+  group_by(.metric) %>% 
+  summarise(min = min(.estimate),max = max(.estimate),mean = mean(.estimate),median = median(.estimate)) %>% 
+  mutate(across(where(is.numeric), ~ round(., 3)))
+
+datatable(decision_tree_results,rownames = FALSE,options = list(
+    searching = FALSE,
+    ordering = FALSE))
+
+```
+
+## Bagged Trees
+
+```{r}
+bagged_trees_results <- bagged_tree_fit %>% 
+  collect_metrics(summarize = FALSE) %>% 
+  group_by(.metric) %>% 
+  summarise(min = min(.estimate),max = max(.estimate),mean = mean(.estimate),median = median(.estimate)) %>% 
+  mutate(across(where(is.numeric), ~ round(., 3)))
+  
+datatable(bagged_trees_results,rownames = FALSE,options = list(
+    searching = FALSE,
+    ordering = FALSE))
+```
+
+## Boosted Trees
+
+```{r}
+boosted_trees_results <- boosted_tree_fit %>% 
+  collect_metrics(summarize = FALSE) %>% 
+  group_by(.metric) %>% 
+  summarise(min = min(.estimate),max = max(.estimate),mean = mean(.estimate),median = median(.estimate)) %>% 
+  mutate(across(where(is.numeric), ~ round(., 3)))
+  
+datatable(boosted_trees_results,rownames = FALSE,options = list(
+    searching = FALSE,
+    ordering = FALSE))
+```
+:::
+
+::: callout-note
+the best model was boosted trees with the highest roc_auc among all models.
+:::
+
+```{r}
+
+```
+
+# Selecting and Finalizing the Best Model
+
+From the comparison, we select the boosted tree model as it achieves the highest ROC AUC score. We then finalize this model using the best parameters.
+
+```{r}
+best_model <- select_best(boosted_tree_fit)
+best_model
+```
+
+# Final Model Evaluation
+
+After selecting the best model, we evaluate its performance on the test set using metrics such as accuracy, sensitivity, specificity, and ROC curve.
+
+```{r}
+last_workflow <- boosted_tree_workflow %>% 
+  finalize_workflow(best_model)
+```
+
+# Model Last fit
+
+```{r}
+last_model <- last_workflow %>% 
+  last_fit(split = loans_split,metrics = metric_set(roc_auc,accuracy))
+last_model %>% 
+  collect_metrics()
+```
+
+# Confusion matrix
+
+```{r}
+last_model %>% 
+  collect_predictions() %>% 
+  conf_mat(truth = loan_default,estimate = .pred_class)
+```
+
+```{r}
+custom_metrics <- metric_set(sens,spec)
+predictions <- last_model %>% collect_predictions()
+custom_metrics(predictions, truth = loan_default,estimate = .pred_class)
+```
+
+# Roc Curve
+
+```{r}
+last_model %>% 
+  collect_predictions() %>% 
+  roc_curve(truth = loan_default,.pred_yes) %>% 
+  autoplot()
+```
+
+# Feature importance
+
+```{r}
+vip::vip(last_model$.workflow[[1]])
+```
+
+-   We can observe the most important feature is interest rate.
+
+# Conclusion
+
+The analysis concludes that the boosted tree model with the selected hyperparameters is the most suitable for predicting loan defaults in this dataset, offering an optimal balance of interpretability and predictive accuracy.
